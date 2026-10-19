@@ -103,7 +103,32 @@ async function qrDataUrl(texte) {
   return QRCode.toDataURL(texte, { width: 420, margin: 2, errorCorrectionLevel: 'M' });
 }
 
-function register(app, db, { now, fail, wrap, txt, admin, posteOuAdmin, enregistrerPassage }) {
+function afficheQrPdf(entreprise, png, base) {
+  const PDFDocument = require('pdfkit');
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    const largeur = doc.page.width - 100;
+    const centre = { width: largeur, align: 'center' };
+    doc.font('Helvetica-Bold').fontSize(28).fillColor('#7a1f3d').text(entreprise, 50, 60, centre);
+    doc.moveDown(0.4).font('Helvetica').fontSize(18).fillColor('#222').text('Pointage des secrétaires', centre);
+    const cote = 340;
+    doc.image(png, (doc.page.width - cote) / 2, 170, { width: cote, height: cote });
+    doc.font('Helvetica-Bold').fontSize(20).fillColor('#222')
+      .text('Scannez ce QR code avec votre téléphone', 50, 540, centre);
+    doc.moveDown(0.3).font('Helvetica').fontSize(16).text('à votre arrivée et à votre départ', centre);
+    doc.moveDown(1.2).fontSize(11).fillColor('#555')
+      .text('Première utilisation : demandez à la responsable d’activer votre téléphone.', centre);
+    doc.font('Helvetica').fontSize(8).fillColor('#999')
+      .text(base.replace(/^https?:\/\//, ''), 50, doc.page.height - 70, centre);
+    doc.end();
+  });
+}
+
+function register(app, db,{ now, fail, wrap, txt, admin, posteOuAdmin, enregistrerPassage }) {
   const cookieAppareil = (req, valeur, maxAge) => {
     const secure = req.secure || process.env.COOKIE_SECURE === '1' ? '; Secure' : '';
     return `${COOKIE}=${encodeURIComponent(valeur)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
@@ -167,6 +192,17 @@ function register(app, db, { now, fail, wrap, txt, admin, posteOuAdmin, enregist
     const url = `${base}/m.html#c=F.${getParam(db, 'qr_fixe_token')}`;
     res.setHeader('Cache-Control', 'no-store');
     res.json({ url, qr: await qrDataUrl(url), actif: getParam(db, 'qr_mode') === 'fixe', adresse_locale: estAdresseLocale(base) });
+  }));
+
+  // Affiche A4 à imprimer et coller dans la boutique.
+  app.get('/api/qr-boutique/fixe.pdf', admin, wrap(async (req, res) => {
+    const base = adresseBase(db, req);
+    const url = `${base}/m.html#c=F.${getParam(db, 'qr_fixe_token')}`;
+    const png = await QRCode.toBuffer(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
+    const pdf = await afficheQrPdf(getParam(db, 'entreprise'), png, base);
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('pdf').setHeader('Content-Disposition', 'attachment; filename="DCS_QR_pointage_boutique.pdf"');
+    res.send(pdf);
   }));
 
   app.post('/api/qr-boutique/fixe/regenerer', admin, wrap((req, res) => {

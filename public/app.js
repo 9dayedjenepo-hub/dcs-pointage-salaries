@@ -715,7 +715,7 @@
           </div>
           <div class="actions" style="margin-top:.5rem"><button type="button" class="sec petit" id="btn-gps">Utiliser ma position actuelle (à faire dans la boutique)</button><button type="button" class="sec petit" id="btn-gps-off">Désactiver le contrôle GPS</button></div>
           <div class="aide">Laisser vide pour ne pas contrôler la position. Le GPS exige que l’application soit en https. Il dissuade la fraude, mais une position peut être falsifiée : le QR dynamique reste la meilleure protection.</div></div>
-        <div class="actions"><button type="submit">Enregistrer</button><button type="button" class="sec" id="btn-qr-fixe">Imprimer le QR fixe</button><button type="button" class="sec" id="btn-qr-regen">Remplacer le QR fixe</button></div>
+        <div class="actions"><button type="submit">Enregistrer</button><a class="btn sec" href="/api/qr-boutique/fixe.pdf">Télécharger le QR fixe (PDF)</a><button type="button" class="sec" id="btn-qr-fixe">Imprimer le QR fixe</button><button type="button" class="sec" id="btn-qr-regen">Remplacer le QR fixe</button></div>
       </form><div class="impr-qr" id="impr-qr"></div></div>
       <div class="grille2">
         <div class="carte"><h2>Calendrier et notifications</h2><form id="f-params">
@@ -780,7 +780,7 @@
       document.getElementById('impr-qr').innerHTML = `<h1>${esc(state.entreprise)}</h1><p>Pointage des secrétaires<br>Scannez avec votre téléphone à l’arrivée et au départ</p><img src="${q.qr}" alt="">`;
       infoModal('QR code fixe de la boutique', `<div style="text-align:center">${!q.actif ? '<div class="bandeau attention" style="text-align:left">Le mode actuel est « dynamique » : ce QR fixe ne sera accepté qu’après avoir choisi le mode « Fixe » et enregistré.</div>' : ''}
         ${q.adresse_locale ? '<div class="bandeau erreur" style="text-align:left">Ce QR contient « localhost » : renseignez d’abord l’adresse du serveur pour les téléphones.</div>' : ''}
-        <img src="${q.qr}" alt="QR fixe" style="width:280px;max-width:100%;image-rendering:pixelated"><p><button id="btn-impr-qr">Imprimer</button></p></div>`, false);
+        <img src="${q.qr}" alt="QR fixe" style="width:280px;max-width:100%;image-rendering:pixelated"><p class="actions" style="justify-content:center"><button id="btn-impr-qr">Imprimer</button><a class="btn sec" href="/api/qr-boutique/fixe.pdf">Télécharger en PDF</a></p></div>`, false);
       document.getElementById('btn-impr-qr').onclick = () => window.print();
     };
     document.getElementById('btn-qr-regen').onclick = async () => {
