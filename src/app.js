@@ -189,8 +189,72 @@ function createApp(db,{ now = () => new Date() } = {}) {
 
   // ---------- Secrétaires ----------
   app.get('/api/secretaires', admin, (req, res) => {
-    res.json(db.prepare('SELECT id, nom, prenom, telephone, date_embauche, actif, cree_le FROM secretaires ORDER BY actif DESC, nom, prenom').all());
+    res.json(db.prepare(`SELECT s.id, s.nom, s.prenom, s.telephone, s.date_embauche, s.actif, s.cree_le, s.archive, s.archive_le,
+      u.nom_complet AS archive_par_nom FROM secretaires s LEFT JOIN utilisateurs u ON u.id = s.archive_par
+      ORDER BY s.archive, s.actif DESC, s.nom, s.prenom`).all());
   });
+
+  // Données attachées à une secrétaire : décide entre suppression définitive et archivage.
+  function donneesLiees(id) {
+    const n = (sql) => db.prepare(sql).get(id).n;
+    const dansInstantanes = (table) => db.prepare(`SELECT mois, snapshot_json FROM ${table}`).all()
+      .filter((c) => JSON.parse(c.snapshot_json).secretaires.some((s) => s.id === id)).map((c) => c.mois);
+    const liens = {
+      pointages: n('SELECT COUNT(*) AS n FROM pointages WHERE secretaire_id = ?'),
+      avances: n('SELECT COUNT(*) AS n FROM avances WHERE secretaire_id = ?'),
+      retenues: n('SELECT COUNT(*) AS n FROM retenues WHERE secretaire_id = ?'),
+      mois_clotures: [...new Set([...dansInstantanes('clotures'), ...dansInstantanes('clotures_archives')])].sort(),
+    };
+    liens.definitive_possible = !liens.pointages && !liens.avances && !liens.retenues && !liens.mois_clotures.length;
+    return liens;
+  }
+  const secretaireOuEchec = (id) => {
+    const s = db.prepare('SELECT * FROM secretaires WHERE id = ?').get(Number(id));
+    if (!s) fail(404, 'Secrétaire introuvable.');
+    return s;
+  };
+
+  app.get('/api/secretaires/:id/suppression', admin, wrap((req, res) => {
+    const s = secretaireOuEchec(req.params.id);
+    res.json({ id: s.id, nom: `${s.prenom} ${s.nom}`, archive: !!s.archive, ...donneesLiees(s.id) });
+  }));
+
+  // Supprimer : définitif seulement sans aucune donnée liée ; sinon archivage qui conserve tout l'historique.
+  app.delete('/api/secretaires/:id', admin, wrap((req, res) => {
+    const s = secretaireOuEchec(req.params.id);
+    if (req.body?.confirmation !== 'SUPPRIMER') fail(400, 'Confirmation manquante : saisissez SUPPRIMER pour confirmer.');
+    const liens = donneesLiees(s.id);
+    const nom = `${s.prenom} ${s.nom}`;
+    if (liens.definitive_possible) {
+      tx(db, () => {
+        db.prepare('DELETE FROM appareils WHERE secretaire_id = ?').run(s.id);
+        db.prepare('DELETE FROM codes_activation WHERE secretaire_id = ?').run(s.id);
+        // Les tentatives (journal de sécurité) sont conservées, détachées de la fiche supprimée.
+        db.prepare('UPDATE tentatives_pointage SET secretaire_id = NULL, motif = COALESCE(motif, \'\') || ? WHERE secretaire_id = ?')
+          .run(` [secrétaire supprimée : ${nom}]`, s.id);
+        db.prepare('DELETE FROM secretaires WHERE id = ?').run(s.id);
+      });
+      journal(db, req.user.id, 'secretaire_suppression_definitive', { id: s.id, nom });
+      return res.json({ mode: 'definitive', nom });
+    }
+    if (s.archive) fail(409, `${nom} est déjà archivée.`);
+    tx(db, () => {
+      db.prepare('UPDATE secretaires SET archive = 1, actif = 0, archive_le = ?, archive_par = ?, badge_token = ? WHERE id = ?')
+        .run(now().toISOString(), req.user.id, nouveauBadge(), s.id);
+      db.prepare('UPDATE appareils SET revoque = 1 WHERE secretaire_id = ? AND revoque = 0').run(s.id);
+      db.prepare('UPDATE codes_activation SET utilise = 1 WHERE secretaire_id = ? AND utilise = 0').run(s.id);
+    });
+    journal(db, req.user.id, 'secretaire_archivage', { id: s.id, nom, liens });
+    res.json({ mode: 'archivee', nom, liens });
+  }));
+
+  app.post('/api/secretaires/:id/restaurer', admin, wrap((req, res) => {
+    const s = secretaireOuEchec(req.params.id);
+    if (!s.archive) fail(409, 'Cette secrétaire n’est pas archivée.');
+    db.prepare('UPDATE secretaires SET archive = 0, archive_le = NULL, archive_par = NULL WHERE id = ?').run(s.id);
+    journal(db, req.user.id, 'secretaire_restauration', { id: s.id });
+    res.json({ ok: true });
+  }));
 
   const lireSecretaire = (b) => {
     const s = { nom: txt(b.nom, 60), prenom: txt(b.prenom, 60), telephone: txt(b.telephone, 30) || null, date_embauche: b.date_embauche || null };
@@ -210,6 +274,8 @@ function createApp(db,{ now = () => new Date() } = {}) {
   app.put('/api/secretaires/:id', admin, wrap((req, res) => {
     const s = lireSecretaire(req.body || {});
     const actif = req.body?.actif === false || req.body?.actif === 0 ? 0 : 1;
+    const existante = db.prepare('SELECT archive FROM secretaires WHERE id = ?').get(Number(req.params.id));
+    if (existante?.archive && actif) fail(409, 'Cette secrétaire est archivée : restaurez-la d’abord.');
     const r = db.prepare('UPDATE secretaires SET nom = ?, prenom = ?, telephone = ?, date_embauche = ?, actif = ? WHERE id = ?')
       .run(s.nom, s.prenom, s.telephone, s.date_embauche, actif, Number(req.params.id));
     if (!r.changes) fail(404, 'Secrétaire introuvable.');
@@ -281,7 +347,9 @@ function createApp(db,{ now = () => new Date() } = {}) {
 
   app.post('/api/pointages', admin, wrap((req, res) => {
     const secId = Number(req.body?.secretaire_id);
-    if (!db.prepare('SELECT 1 FROM secretaires WHERE id = ?').get(secId)) fail(400, 'Secrétaire introuvable.');
+    const sp = db.prepare('SELECT archive FROM secretaires WHERE id = ?').get(secId);
+    if (!sp) fail(400, 'Secrétaire introuvable.');
+    if (sp.archive) fail(409, 'Cette secrétaire est archivée : restaurez-la d’abord.');
     const p = lirePointage(req.body || {});
     const justification = justificationValide(req.body?.justification);
     verifierMoisOuvert(p.date.slice(0, 7), 'Ce pointage');
@@ -352,7 +420,9 @@ function createApp(db,{ now = () => new Date() } = {}) {
     app.post(`/api/${table}`, admin, wrap((req, res) => {
       const b = req.body || {};
       const secId = Number(b.secretaire_id);
-      if (!db.prepare('SELECT 1 FROM secretaires WHERE id = ?').get(secId)) fail(400, 'Secrétaire introuvable.');
+      const so = db.prepare('SELECT archive FROM secretaires WHERE id = ?').get(secId);
+      if (!so) fail(400, 'Secrétaire introuvable.');
+      if (so.archive) fail(409, 'Cette secrétaire est archivée : restaurez-la d’abord.');
       const montant = montantValide(b.montant);
       if (!estDate(b.date_operation)) fail(400, 'Date invalide.');
       const mois = b.mois_imputation ? moisValide(b.mois_imputation) : b.date_operation.slice(0, 7);
@@ -620,6 +690,12 @@ function createApp(db,{ now = () => new Date() } = {}) {
     const id = Number(req.params.id);
     if (id === req.user.id) fail(400, 'Vous ne pouvez pas désactiver votre propre compte.');
     const actif = req.body?.actif ? 1 : 0;
+    const cible = db.prepare('SELECT role, actif FROM utilisateurs WHERE id = ?').get(id);
+    if (!cible) fail(404, 'Compte introuvable.');
+    if (!actif && cible.role === 'admin' && cible.actif
+      && db.prepare("SELECT COUNT(*) AS n FROM utilisateurs WHERE role = 'admin' AND actif = 1").get().n <= 1) {
+      fail(409, 'Impossible de désactiver le dernier compte administrateur actif.');
+    }
     db.prepare('UPDATE utilisateurs SET actif = ? WHERE id = ?').run(actif, id);
     if (!actif) db.prepare('DELETE FROM sessions WHERE utilisateur_id = ?').run(id);
     journal(db, req.user.id, 'utilisateur_actif', { id, actif });

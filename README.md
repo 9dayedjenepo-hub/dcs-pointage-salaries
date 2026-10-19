@@ -41,6 +41,9 @@ npm test
 ### Gestion
 
 1. **Secrétaires** : ajout des secrétaires, activation et désactivation de leur téléphone (téléphone perdu ou changé), badge de secours.
+   - **Désactiver** (Modifier › décocher « Active ») : elle ne peut plus pointer ; tout reste visible.
+   - **Supprimer** : si elle n'a aucun pointage, aucune avance, aucune retenue et n'apparaît dans aucun mois clôturé, la fiche est effacée définitivement après deux confirmations (saisie de « SUPPRIMER »). Sinon, elle est **archivée** : elle disparaît de la liste, ne peut plus pointer (badge et téléphone désactivés), mais ses heures, salaires, avances et rapports restent intacts. Une secrétaire archivée peut être restaurée.
+   - Les comptes administrateurs ne sont jamais concernés ; on ne peut pas désactiver son propre compte ni le dernier administrateur actif.
 4. **Salaires et rémunérations** : choisissez le mois et l'année. Pour chaque secrétaire : jours travaillés, heures, heures supplémentaires, absences, tarif, salaire brut, avances, retenues, net à payer. Cliquez sur une ligne pour voir les heures de chaque jour.
 5. **Avances et retenues** : enregistrées depuis la page Salaires, avec le montant, la date, le motif et le nom de l'administrateur. Chacune est rattachée à un seul mois de déduction.
 6. **Clôture** : une fois le mois terminé, « Valider et clôturer le mois » fige définitivement les montants et envoie le récapitulatif par e-mail.

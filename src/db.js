@@ -224,6 +224,13 @@ function openDb(file) {
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'pointages'").get()) migrer(db);
   db.exec(SCHEMA);
+  // Archivage (suppression logique) des secrétaires : colonnes ajoutées sans toucher aux données existantes.
+  const colonnes = db.prepare('PRAGMA table_info(secretaires)').all().map((c) => c.name);
+  if (!colonnes.includes('archive')) {
+    db.exec(`ALTER TABLE secretaires ADD COLUMN archive INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE secretaires ADD COLUMN archive_le TEXT;
+      ALTER TABLE secretaires ADD COLUMN archive_par INTEGER REFERENCES utilisateurs(id);`);
+  }
   const ins = db.prepare('INSERT OR IGNORE INTO parametres (cle, valeur) VALUES (?, ?)');
   for (const [k, v] of Object.entries(DEFAULTS)) ins.run(k, v);
   // Secrets du QR de la boutique, générés une fois par installation.

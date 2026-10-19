@@ -343,10 +343,12 @@
   async function pageSecretaires(el) {
     const [liste, appareils] = await Promise.all([api('GET', '/api/secretaires'), api('GET', '/api/appareils')]);
     const tel = (id) => appareils.find((a) => a.secretaire_id === id);
-    el.innerHTML = `<div class="entete-page"><div><h1>Secrétaires</h1><p>Chaque secrétaire pointe avec son téléphone, après l’avoir activé une seule fois. Le badge QR reste disponible en secours.</p></div>
+    const archivees = liste.filter((s) => s.archive);
+    el.innerHTML = `<div class="entete-page"><div><h1>Secrétaires</h1><p>Chaque secrétaire pointe avec son téléphone, après l’avoir activé une seule fois. Le badge QR reste disponible en secours.</p>
+      <p class="mut"><strong>Désactiver</strong> (Modifier › décocher « Active ») : elle ne peut plus pointer, tout reste visible. <strong>Supprimer</strong> : suppression définitive si aucune donnée n’existe, sinon archivage qui conserve ses heures, salaires, avances et rapports.</p></div>
       <button id="btn-ajout">+ Ajouter une secrétaire</button></div>
       <div class="carte table-wrap"><table><thead><tr><th>Nom et prénom</th><th>N° de téléphone</th><th>Embauche</th><th>État</th><th>Téléphone de pointage</th><th>Actions</th></tr></thead><tbody>
-      ${liste.map((s) => {
+      ${liste.filter((s) => !s.archive).map((s) => {
         const a = tel(s.id);
         return `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td><td>${esc(s.telephone || '')}</td><td>${dateFr(s.date_embauche)}</td>
         <td>${s.actif ? etat('ok', 'Active') : etat('neutre', 'Inactive')}</td>
@@ -355,9 +357,16 @@
         ${a ? `<button class="danger petit" data-act="revoquer" data-id="${s.id}">Désactiver le téléphone</button>` : ''}
         <button class="sec petit" data-act="modif" data-id="${s.id}">Modifier</button>
         <button class="sec petit" data-act="badge" data-id="${s.id}">Badge (secours)</button>
-        <button class="sec petit" data-act="nouveau" data-id="${s.id}">Nouveau badge</button></td></tr>`;
+        <button class="sec petit" data-act="nouveau" data-id="${s.id}">Nouveau badge</button>
+        <button class="danger petit" data-act="supprimer" data-id="${s.id}">Supprimer</button></td></tr>`;
       }).join('') || '<tr><td colspan="6" class="vide">Aucune secrétaire enregistrée.</td></tr>'}
-      </tbody></table></div><div class="badge-impr" id="badge-impr"></div>`;
+      </tbody></table></div>
+      ${archivees.length ? `<details class="carte"><summary><strong>Secrétaires archivées (${archivees.length})</strong> — historique conservé, pointage impossible</summary>
+        <div class="table-wrap" style="margin-top:.6rem"><table><thead><tr><th>Nom et prénom</th><th>Archivée le</th><th>Par</th><th></th></tr></thead><tbody>
+        ${archivees.map((s) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td><td>${esc(dtLocal(s.archive_le))}</td><td>${esc(s.archive_par_nom || '')}</td>
+          <td><button class="sec petit" data-act="restaurer" data-id="${s.id}">Restaurer</button></td></tr>`).join('')}
+        </tbody></table></div></details>` : ''}
+      <div class="badge-impr" id="badge-impr"></div>`;
     const formSec = (s = {}) => [
       { name: 'prenom', label: 'Prénom', required: true, value: s.prenom },
       { name: 'nom', label: 'Nom', required: true, value: s.nom },
@@ -384,6 +393,56 @@
             <p class="mut">QR à usage unique, valable jusqu’au ${esc(dtLocal(r.expire_le))}. Ne le montrez qu’à ${esc(s.prenom)}. ${tel(s.id) ? 'Son ancien téléphone sera désactivé.' : ''}</p></div>`, false);
           $modal.querySelector('[data-fermer]').addEventListener('click', () => route());
         } catch (e) { toast(e.message, true); }
+        return;
+      }
+      if (b.dataset.act === 'supprimer') {
+        let info;
+        try { info = await api('GET', `/api/secretaires/${s.id}/suppression`); } catch (e) { toast(e.message, true); return; }
+        const nom = `${s.prenom} ${s.nom}`;
+        if (!info.definitive_possible) {
+          const details = [
+            info.pointages ? `${info.pointages} pointage(s)` : '',
+            info.avances ? `${info.avances} avance(s)` : '',
+            info.retenues ? `${info.retenues} retenue(s)` : '',
+            info.mois_clotures.length ? `${info.mois_clotures.length} mois clôturé(s) (${info.mois_clotures.map(moisLib).join(', ')})` : '',
+          ].filter(Boolean).join(', ');
+          const r = await formModal({
+            titre: `Supprimer ${nom}`, bouton: 'Archiver la secrétaire',
+            intro: `<div class="bandeau attention"><strong>${esc(nom)} possède des données : ${esc(details)}.</strong><br>
+              Pour préserver les salaires et les anciens rapports, elle sera <strong>archivée</strong> au lieu d’être effacée :</div>
+              <ul><li>elle disparaît de la liste et ne peut plus pointer (téléphone et badge désactivés) ;</li>
+              <li>ses heures, salaires, avances et rapports restent intacts ;</li>
+              <li>vous pourrez la restaurer à tout moment.</li></ul>`,
+            champs: [{ name: 'confirmation', label: 'Pour confirmer, saisissez SUPPRIMER', required: true }],
+            onSubmit: (v) => api('DELETE', `/api/secretaires/${s.id}`, { confirmation: v.confirmation }),
+          });
+          if (r) { toast(`${nom} a été archivée. Son historique est conservé.`); route(); }
+          return;
+        }
+        // Aucune donnée liée : suppression définitive, avec deux confirmations.
+        const ok1 = await formModal({
+          titre: `Supprimer définitivement ${nom} ?`, bouton: 'Continuer',
+          intro: `<div class="bandeau erreur"><strong>Suppression définitive.</strong> ${esc(nom)} n’a aucun pointage, aucune avance et n’apparaît dans aucun mois clôturé.
+            Sa fiche, son badge et l’activation de son téléphone seront effacés. <strong>Cette opération est irréversible.</strong></div>`,
+          champs: [],
+        });
+        if (!ok1) return;
+        const r = await formModal({
+          titre: 'Deuxième confirmation', bouton: 'Supprimer définitivement',
+          intro: `<p>Confirmez la suppression définitive de <strong>${esc(nom)}</strong>.</p>`,
+          champs: [{ name: 'confirmation', label: 'Saisissez SUPPRIMER (en majuscules)', required: true }],
+          onSubmit: (v) => api('DELETE', `/api/secretaires/${s.id}`, { confirmation: v.confirmation }),
+        });
+        if (r) { toast(`${nom} a été supprimée définitivement.`); route(); }
+        return;
+      }
+      if (b.dataset.act === 'restaurer') {
+        const r = await formModal({
+          titre: `Restaurer ${s.prenom} ${s.nom}`, bouton: 'Restaurer',
+          intro: '<p>Elle réapparaîtra dans la liste, <strong>inactive</strong> : cochez « Active » (Modifier) puis réactivez son téléphone pour qu’elle puisse de nouveau pointer.</p>',
+          champs: [], onSubmit: () => api('POST', `/api/secretaires/${s.id}/restaurer`),
+        });
+        if (r) { toast('Secrétaire restaurée.'); route(); }
         return;
       }
       if (b.dataset.act === 'revoquer') {
@@ -627,7 +686,7 @@
         titre: av ? 'Enregistrer une avance sur salaire' : 'Enregistrer une retenue autorisée',
         intro: `<p class="mut">Elle sera déduite <strong>une seule fois</strong>, du salaire du mois d’imputation choisi.</p>`,
         champs: [
-          { name: 'secretaire_id', label: 'Secrétaire', type: 'select', required: true, options: [{ value: '', label: '— Choisir —' }, ...secs.map((s) => ({ value: s.id, label: `${s.prenom} ${s.nom}${s.actif ? '' : ' (inactive)'}` }))] },
+          { name: 'secretaire_id', label: 'Secrétaire', type: 'select', required: true, options: [{ value: '', label: '— Choisir —' }, ...secs.filter((s) => !s.archive).map((s) => ({ value: s.id, label: `${s.prenom} ${s.nom}${s.actif ? '' : ' (inactive)'}` }))] },
           { name: 'montant', label: 'Montant (F CFA)', type: 'number', required: true, attrs: 'min="1" step="1" inputmode="numeric"' },
           { name: 'date_operation', label: av ? 'Date de versement' : 'Date', type: 'date', required: true, value: auj.startsWith(m) ? auj : debutMois },
           { name: 'mois_imputation', label: 'Déduire du salaire de', type: 'month', required: true, value: m },
