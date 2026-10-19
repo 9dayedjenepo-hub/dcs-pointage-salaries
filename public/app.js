@@ -670,14 +670,14 @@
   async function pageHistorique(el) {
     const [clotures, emails, corrections] = await Promise.all([api('GET', '/api/clotures'), api('GET', '/api/emails'), api('GET', '/api/corrections')]);
     const libE = { envoye: ['ok', 'Envoyé'], non_envoye: ['attention', 'Non envoyé'], echec: ['erreur', 'Échec'] };
-    el.innerHTML = `<div class="entete-page"><div><h1>Historique</h1><p>Rapports des mois clôturés, e-mails de récapitulatif et corrections de pointage.</p></div></div>
+    el.innerHTML = `<div class="entete-page"><div><h1>Historique</h1><p>Rapports des mois clôturés, e-mails envoyés et corrections de pointage.</p></div></div>
       <div class="carte"><h2>Mois clôturés</h2><div class="table-wrap"><table><thead><tr><th>Mois</th><th class="n">Heures</th><th class="n">Salaires calculés</th><th class="n">Avances</th><th class="n">Reste à payer</th><th>Validé</th><th>Rapports</th></tr></thead><tbody>
       ${clotures.map((c) => `<tr><td><strong>${esc(c.libelle)}</strong></td><td class="n">${H(c.totaux.minutes)}</td><td class="n">${F(c.totaux.salaire_brut)}</td><td class="n">${F(c.totaux.avances)}</td><td class="n">${F(c.totaux.net)}</td>
         <td>${esc(dtLocal(c.valide_le))}<br><small>${esc(c.valide_par)}</small></td>
         <td class="actions"><a class="btn sec petit" href="/api/paie/${c.mois}/rapport.pdf" target="_blank" rel="noopener">PDF</a><a class="btn sec petit" href="/api/paie/${c.mois}/rapport.xlsx">Excel</a><a class="btn sec petit" href="#/salaires" data-mois="${c.mois}">Détail</a></td></tr>`).join('') || '<tr><td colspan="7" class="vide">Aucun mois clôturé pour l’instant.</td></tr>'}
       </tbody></table></div></div>
-      <div class="carte"><h2>Récapitulatifs envoyés par e-mail</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Mois</th><th>Destinataire</th><th>État</th><th></th></tr></thead><tbody>
-      ${emails.map((e, i) => `<tr><td>${esc(dtLocal(e.cree_le))}</td><td>${e.mois ? esc(moisLib(e.mois)) : ''}</td><td>${esc(e.destinataire || '—')}</td><td>${etat(...libE[e.statut])}${e.erreur ? `<br><small>${esc(e.erreur)}</small>` : ''}</td>
+      <div class="carte"><h2>E-mails envoyés</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Objet</th><th>Destinataire</th><th>État</th><th></th></tr></thead><tbody>
+      ${emails.map((e, i) => `<tr><td>${esc(dtLocal(e.cree_le))}</td><td>${e.mois ? `Récapitulatif de ${esc(moisLib(e.mois))}` : esc(e.sujet.replace(/^\[[^\]]*\]\s*/, ''))}</td><td>${esc(e.destinataire || '—')}</td><td>${etat(...libE[e.statut])}${e.erreur ? `<br><small>${esc(e.erreur)}</small>` : ''}</td>
         <td><button class="sec petit" data-mail="${i}">Voir</button></td></tr>`).join('') || '<tr><td colspan="5" class="vide">Aucun e-mail.</td></tr>'}
       </tbody></table></div></div>
       <div class="carte"><h2>Corrections de pointage</h2>${tableauCorrections(corrections)}</div>`;
@@ -723,6 +723,8 @@
             ${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label><input type="checkbox" name="j" value="${d}" ${jours.includes(String(d)) ? 'checked' : ''}> ${JOURS[d]}</label>`).join('')}</div></div>
           <div class="champ"><label for="email">E-mail de l’administrateur (récapitulatif mensuel)</label><input id="email" type="email" value="${esc(params.email_admin)}">
             <div class="aide">Serveur d’envoi (SMTP) : ${params.smtp ? '<span class="etat ok">configuré</span>' : '<span class="etat attention">non configuré — voir le fichier .env</span>'}</div></div>
+          <div class="champ"><div class="cases"><label><input type="checkbox" id="notif" ${params.notif_pointage ? 'checked' : ''}> Recevoir un e-mail à chaque arrivée et départ d’une secrétaire</label></div>
+            <div class="aide">Envoyé à l’adresse ci-dessus, avec l’heure de Bamako et, au départ, la durée de présence. Désactivé par défaut.</div></div>
           <button type="submit">Enregistrer</button></form></div>
         <div class="carte"><h2>Comptes</h2>
           <div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Rôle</th><th></th></tr></thead><tbody>
@@ -792,7 +794,7 @@
     document.getElementById('f-params').addEventListener('submit', async (e) => {
       e.preventDefault();
       const j = [...e.target.querySelectorAll('input[name=j]:checked')].map((x) => x.value).join(',');
-      try { await api('PUT', '/api/parametres', { jours_ouvrables: j, email_admin: document.getElementById('email').value.trim() }); toast('Paramètres enregistrés.'); } catch (err) { toast(err.message, true); }
+      try { await api('PUT', '/api/parametres', { jours_ouvrables: j, email_admin: document.getElementById('email').value.trim(), notif_pointage: document.getElementById('notif').checked }); toast('Paramètres enregistrés.'); } catch (err) { toast(err.message, true); }
     });
     document.getElementById('btn-user').onclick = async () => {
       const r = await formModal({

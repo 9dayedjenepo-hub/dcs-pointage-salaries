@@ -1,5 +1,6 @@
 'use strict';
-// Envoi du récapitulatif mensuel à l'administrateur après validation de la paie.
+// E-mails à l'administrateur : récapitulatif mensuel après validation de la paie
+// et, si l'option est activée, notification à chaque arrivée et départ.
 const nodemailer = require('nodemailer');
 const { getParam } = require('./db');
 const { formatHeures } = require('./payroll');
@@ -35,9 +36,9 @@ function construireRecap(rapport) {
   return { sujet, corps };
 }
 
-async function envoyerRecapMensuel(db, rapport, pdf) {
+// Envoie un message à l'administrateur et le consigne dans la table emails (mois NULL = notification de pointage).
+async function envoyerAdmin(db, { mois = null, sujet, corps, attachments = [] }) {
   const destinataire = getParam(db, 'email_admin');
-  const { sujet, corps } = construireRecap(rapport);
   let statut = 'envoye';
   let erreur = null;
   if (!destinataire) {
@@ -59,7 +60,7 @@ async function envoyerRecapMensuel(db, rapport, pdf) {
         to: destinataire,
         subject: sujet,
         text: corps,
-        attachments: pdf ? [{ filename: `DCS_Salaires_${rapport.mois}.pdf`, content: pdf }] : [],
+        attachments,
       });
     } catch (e) {
       statut = 'echec';
@@ -67,8 +68,42 @@ async function envoyerRecapMensuel(db, rapport, pdf) {
     }
   }
   db.prepare('INSERT INTO emails (mois, destinataire, sujet, corps, statut, erreur) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(rapport.mois, destinataire || null, sujet, corps, statut, erreur);
+    .run(mois, destinataire || null, sujet, corps, statut, erreur);
   return { statut, erreur, destinataire };
 }
 
-module.exports = { envoyerRecapMensuel, construireRecap, smtpConfigure };
+function envoyerRecapMensuel(db, rapport, pdf) {
+  const { sujet, corps } = construireRecap(rapport);
+  return envoyerAdmin(db, {
+    mois: rapport.mois, sujet, corps,
+    attachments: pdf ? [{ filename: `DCS_Salaires_${rapport.mois}.pdf`, content: pdf }] : [],
+  });
+}
+
+// Notification d'arrivée ou de départ (passage = résultat de enregistrerPassage).
+function construireNotification(entreprise, p) {
+  const [a, m, j] = p.date.split('-');
+  const arrivee = p.type === 'arrivee';
+  const sujet = `[${entreprise}] ${arrivee ? 'Arrivée' : 'Départ'} de ${p.secretaire} à ${p.heure}`;
+  const corps = [
+    `${p.secretaire} a pointé son ${arrivee ? 'arrivée' : 'départ'} le ${j}/${m}/${a} à ${p.heure} (heure de Bamako).`,
+    ...(arrivee ? [] : [`Arrivée à ${p.arrivee} — durée de présence : ${formatHeures(p.minutes)}.`]),
+    ...(p.source === 'telephone' ? ['Pointage effectué depuis son téléphone.'] : []),
+    ``,
+    `— ${entreprise}, système de pointage`,
+  ].join('\n');
+  return { sujet, corps };
+}
+
+// Ne lève jamais d'exception : le pointage est déjà enregistré quand elle est appelée.
+async function notifierPassage(db, passage) {
+  try {
+    if (getParam(db, 'notif_pointage') !== '1') return null;
+    return await envoyerAdmin(db, construireNotification(getParam(db, 'entreprise'), passage));
+  } catch (e) {
+    console.error('Notification de pointage impossible :', e.message);
+    return null;
+  }
+}
+
+module.exports = { envoyerRecapMensuel, construireRecap, construireNotification, notifierPassage, smtpConfigure };

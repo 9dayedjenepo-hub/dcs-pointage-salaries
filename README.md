@@ -61,12 +61,14 @@ npm test
 - Un mois clôturé ne peut plus être modifié (pointages, avances, retenues, tarif). Son rapport est figé.
 - Calcul automatique de fin de mois : dès le 1er du mois, la paie du mois écoulé est calculée et signalée « à valider » sur le tableau de bord. La clôture reste une décision de l'administrateur.
 
-## E-mail du récapitulatif mensuel
+## E-mails à l'administrateur
 
 1. Renseignez l'adresse de l'administrateur dans **Paramètres**.
-2. Copiez `.env.example` en `.env` et remplissez les paramètres SMTP.
+2. Copiez `.env.example` en `.env` et remplissez les paramètres SMTP (sur Railway : variables `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` du service).
 
-Sans configuration, la clôture fonctionne quand même. L'e-mail est alors conservé dans l'Historique avec l'état « non envoyé » et peut être renvoyé plus tard.
+**Récapitulatif mensuel** : envoyé à la clôture du mois, avec le rapport PDF. Sans configuration, la clôture fonctionne quand même. L'e-mail est alors conservé dans l'Historique avec l'état « non envoyé » et peut être renvoyé plus tard.
+
+**Notification d'arrivée et de départ** (facultative, désactivée par défaut) : cochez « Recevoir un e-mail à chaque arrivée et départ » dans **Paramètres › Calendrier et notifications**. À chaque pointage (badge ou téléphone), l'administrateur reçoit un court message : nom de la secrétaire, arrivée ou départ, date et heure de Bamako et, au départ, la durée de présence. L'envoi se fait en arrière-plan : un serveur SMTP lent ou en panne ne retarde ni ne bloque jamais le pointage. Chaque notification est consignée dans l'Historique (« envoyé », « non envoyé » si l'adresse ou le SMTP manque, ou « échec »).
 
 ## Sécurité
 
@@ -88,7 +90,7 @@ Sans configuration, la clôture fonctionne quand même. L'e-mail est alors conse
 | `src/telephone.js` | Pointage par téléphone : activation, QR de la boutique, contrôle GPS |
 | `public/m.html`, `public/m.js` | Page ouverte sur le téléphone des secrétaires |
 | `src/reports.js` | Rapports PDF et Excel |
-| `src/mailer.js` | Récapitulatif mensuel par e-mail |
+| `src/mailer.js` | Récapitulatif mensuel et notifications de pointage par e-mail |
 | `src/time.js` | Fuseau Africa/Bamako |
 | `src/db.js` | Schéma de la base SQLite |
 | `public/` | Interface web |

@@ -137,7 +137,10 @@ function createApp(db,{ now = () => new Date() } = {}) {
         .run(sec.id, iso, source, appareilId, distance);
       return { type: 'arrivee', pointage_id: Number(r.lastInsertRowid), incomplet_precedent: ouvert ? t.localDate(ouvert.arrivee_utc) : null };
     });
-    return { ...resultat, secretaire: `${sec.prenom} ${sec.nom}`, heure: t.localTime(iso), date: aujourdHui };
+    const passage = { ...resultat, secretaire: `${sec.prenom} ${sec.nom}`, heure: t.localTime(iso), date: aujourdHui };
+    // Envoi en arrière-plan : un SMTP lent ou en panne ne retarde ni ne fait échouer le pointage.
+    setImmediate(() => mailer.notifierPassage(db, { ...passage, source }));
+    return passage;
   }
 
   // Badge QR personnel scanné sur le poste de la boutique (mode de secours).
@@ -423,7 +426,10 @@ function createApp(db,{ now = () => new Date() } = {}) {
   });
 
   app.get('/api/emails', admin, (req, res) => {
-    res.json(db.prepare('SELECT * FROM emails ORDER BY id DESC LIMIT 100').all());
+    // Les notifications de pointage (mois NULL) ne doivent pas faire disparaître les récapitulatifs mensuels.
+    const recaps = db.prepare('SELECT * FROM emails WHERE mois IS NOT NULL ORDER BY id DESC LIMIT 100').all();
+    const notifs = db.prepare('SELECT * FROM emails WHERE mois IS NULL ORDER BY id DESC LIMIT 100').all();
+    res.json([...recaps, ...notifs].sort((a, b) => b.id - a.id));
   });
 
   app.get('/api/tableau-de-bord', admin, (req, res) => {
@@ -488,6 +494,7 @@ function createApp(db,{ now = () => new Date() } = {}) {
       entreprise: getParam(db, 'entreprise'),
       jours_ouvrables: getParam(db, 'jours_ouvrables'),
       email_admin: getParam(db, 'email_admin'),
+      notif_pointage: getParam(db, 'notif_pointage') === '1',
       smtp: mailer.smtpConfigure(),
       qr_mode: getParam(db, 'qr_mode'),
       adresse_publique: getParam(db, 'adresse_publique') || require('./telephone').adresseParDefaut() || '',
@@ -511,6 +518,7 @@ function createApp(db,{ now = () => new Date() } = {}) {
       if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) fail(400, 'Adresse e-mail invalide.');
       setParam(db, 'email_admin', e);
     }
+    if (b.notif_pointage != null) setParam(db, 'notif_pointage', b.notif_pointage === true || b.notif_pointage === '1' ? '1' : '0');
     if (b.qr_mode != null) {
       if (!['dynamique', 'fixe'].includes(b.qr_mode)) fail(400, 'Mode de QR invalide.');
       setParam(db, 'qr_mode', b.qr_mode);

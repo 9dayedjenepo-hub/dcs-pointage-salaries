@@ -159,6 +159,7 @@ const DEFAULTS = {
   entreprise: 'Djenepo Couture & Shopping',
   jours_ouvrables: '1,2,3,4,5,6', // lundi à samedi
   email_admin: '',
+  notif_pointage: '0', // « 1 » : e-mail à l'administrateur à chaque arrivée et départ
   qr_mode: 'dynamique', // « dynamique » (écran de la boutique, change toutes les 30 s) ou « fixe » (QR imprimé)
   adresse_publique: '', // adresse à laquelle les téléphones joignent le serveur
   gps_lat: '',
