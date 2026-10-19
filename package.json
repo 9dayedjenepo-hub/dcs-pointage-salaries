@@ -20,5 +20,8 @@
     "nodemailer": "^6.9.16",
     "pdfkit": "^0.15.2",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "jsqr": "^1.4.0"
   }
 }

@@ -129,6 +129,7 @@ function calculerSecretaire(p) {
       minutes_hs: hs,
       taux: tx.taux,
       montant: Math.round((minutes * tx.taux * 100 + hs * tx.taux * (tx.hs_majoration_pct || 0)) / 6000),
+      montant_exact: Math.round((minutes * tx.taux * 100 + hs * tx.taux * (tx.hs_majoration_pct || 0)) / 60) / 100,
       statut,
     });
   }
@@ -143,6 +144,8 @@ function calculerSecretaire(p) {
     if (!parJour.has(date)) { absences += 1; datesAbsence.push(date); }
   }
 
+  // Règle d'arrondi : calcul exact à la minute, arrondi au franc le plus proche une seule fois, sur le total du mois.
+  const salaireExact = Math.round((montantBase + montantHs) / 60) / 100;
   const salaireBrut = Math.round((montantBase + montantHs) / 6000);
   const avancesTotal = p.avances.reduce((a, x) => a + x.montant, 0);
   const retenuesTotal = p.retenues.reduce((a, x) => a + x.montant, 0);
@@ -159,6 +162,7 @@ function calculerSecretaire(p) {
     absences,
     dates_absence: datesAbsence,
     taux_appliques: [...tauxUtilises].sort((a, b) => a - b),
+    salaire_exact: salaireExact,
     salaire_brut: salaireBrut,
     avances_total: avancesTotal,
     retenues_total: retenuesTotal,

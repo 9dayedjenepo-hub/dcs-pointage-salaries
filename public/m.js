@@ -27,7 +27,7 @@
     const res = await fetch(url, opts);
     let data = null;
     try { data = await res.json(); } catch { /* vide */ }
-    if (!res.ok) throw new Error(data?.erreur || `Erreur ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(data?.erreur || `Erreur ${res.status}`), { reessayer: !!data?.reessayer });
     return data;
   }
 
@@ -42,9 +42,11 @@
       if (!window.isSecureContext) return ko(new Error('La localisation exige une connexion sécurisée (https). Prévenez la responsable.'));
       navigator.geolocation.getCurrentPosition(
         (p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude, precision: p.coords.accuracy }),
-        (e) => ko(new Error(e.code === 1
-          ? 'Autorisez la localisation pour ce site, puis scannez à nouveau le QR de la boutique.'
-          : 'Position introuvable. Activez la localisation (GPS) et réessayez.')),
+        (e) => ko(Object.assign(new Error(e.code === 1
+          ? 'Localisation refusée : autorisez la localisation pour ce site dans le navigateur, puis touchez « Réessayer ».'
+          : e.code === 3
+            ? 'La position GPS met du temps à arriver. Patientez quelques secondes puis touchez « Réessayer ».'
+            : 'Position introuvable. Activez la localisation (GPS) du téléphone, puis touchez « Réessayer ».'), { gps: true })),
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
       );
     });
@@ -74,12 +76,21 @@
         ${r.incomplet_precedent ? `<div style="margin-top:.4rem;color:#a35400">Votre départ du ${r.incomplet_precedent.split('-').reverse().join('/')} n’a pas été pointé : signalez-le à la responsable.</div>` : ''}`);
       if (navigator.vibrate) navigator.vibrate(150);
     } catch (e) {
+      // Problème de localisation (GPS lent, refusé, imprécis, hors zone) : on peut réessayer sans rescanner.
+      const reessayer = e.reessayer || e.gps;
       afficher('erreur', 'Pointage refusé', esc(e.message));
-    } finally {
       occupe = false;
       await afficherJour().catch(() => {});
       boutonScanner(moi);
+      if (reessayer) {
+        $actions.insertAdjacentHTML('afterbegin', '<button id="btn-reessayer" class="gros-bouton" style="margin-bottom:.6rem">Réessayer le pointage</button>');
+        document.getElementById('btn-reessayer').onclick = () => pointer(code, moi);
+      }
+      return;
     }
+    occupe = false;
+    await afficherJour().catch(() => {});
+    boutonScanner(moi);
   }
 
   function boutonScanner(moi) {

@@ -12,9 +12,9 @@ const reports = require('./reports');
 const mailer = require('./mailer');
 
 class HttpError extends Error {
-  constructor(code, message) { super(message); this.code = code; }
+  constructor(code, message, extra) { super(message); this.code = code; this.extra = extra; }
 }
-const fail = (code, msg) => { throw new HttpError(code, msg); };
+const fail = (code, msg, extra) => { throw new HttpError(code, msg, extra); };
 
 const ANTI_DOUBLE_SCAN_MS = 60 * 1000;
 const MONTANT_MAX = 10_000_000;
@@ -149,10 +149,19 @@ function createApp(db,{ now = () => new Date() } = {}) {
     if (code.toUpperCase().startsWith('DCS:')) code = code.slice(4);
     if (!code) fail(400, 'QR code vide.');
     const sec = db.prepare('SELECT * FROM secretaires WHERE badge_token = ?').get(code);
-    if (!sec) fail(404, 'Badge inconnu. Vérifiez le QR code.');
-    const r = enregistrerPassage(sec, { source: 'qr' });
-    journal(db, req.user.id, `scan_${r.type}`, { secretaire_id: sec.id, pointage_id: r.pointage_id });
-    res.json(r);
+    const consigner = (resultat, motif, r = {}) => db.prepare(`INSERT INTO tentatives_pointage
+      (cree_le, secretaire_id, source, resultat, type, motif, pointage_id, ip) VALUES (?, ?, 'qr', ?, ?, ?, ?, ?)`)
+      .run(now().toISOString(), sec?.id ?? null, resultat, r.type ?? null, motif, r.pointage_id ?? null, req.ip ?? null);
+    try {
+      if (!sec) fail(404, 'Badge inconnu. Vérifiez le QR code.');
+      const r = enregistrerPassage(sec, { source: 'qr' });
+      consigner('accepte', 'Badge vérifié sur le poste de la boutique', r);
+      journal(db, req.user.id, `scan_${r.type}`, { secretaire_id: sec.id, pointage_id: r.pointage_id });
+      res.json(r);
+    } catch (e) {
+      consigner('refuse', e.message);
+      throw e;
+    }
   }));
 
   // Pointage depuis le téléphone personnel des secrétaires.
@@ -425,6 +434,51 @@ function createApp(db,{ now = () => new Date() } = {}) {
       .map(({ snapshot_json, ...c }) => ({ ...c, libelle: t.monthLabel(c.mois), totaux: JSON.parse(snapshot_json).totaux })));
   });
 
+  // Correction exceptionnelle : le mois clôturé est rouvert, sa version validée est archivée intacte.
+  app.post('/api/paie/:mois/rouvrir', admin, wrap((req, res) => {
+    const mois = moisValide(req.params.mois);
+    const justification = justificationValide(req.body?.justification);
+    tx(db, () => {
+      const c = db.prepare('SELECT * FROM clotures WHERE mois = ?').get(mois);
+      if (!c) fail(409, 'Ce mois n’est pas clôturé.');
+      db.prepare(`INSERT INTO clotures_archives (mois, snapshot_json, valide_par, valide_le, commentaire, rouvert_par, justification)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(mois, c.snapshot_json, c.valide_par, c.valide_le, c.commentaire, req.user.id, justification);
+      db.prepare('DELETE FROM clotures WHERE mois = ?').run(mois);
+    });
+    journal(db, req.user.id, 'reouverture_paie', { mois, justification });
+    res.json({ ok: true });
+  }));
+
+  app.get('/api/clotures/archives', admin, (req, res) => {
+    res.json(db.prepare(`SELECT a.id, a.mois, a.valide_le, a.rouvert_le, a.justification, a.snapshot_json,
+      uv.nom_complet AS valide_par, ur.nom_complet AS rouvert_par FROM clotures_archives a
+      JOIN utilisateurs uv ON uv.id = a.valide_par JOIN utilisateurs ur ON ur.id = a.rouvert_par ORDER BY a.id DESC`).all()
+      .map(({ snapshot_json, ...a }) => ({ ...a, libelle: t.monthLabel(a.mois), totaux: JSON.parse(snapshot_json).totaux })));
+  });
+
+  const rapportArchive = (id) => {
+    const a = db.prepare(`SELECT a.*, uv.nom_complet AS valide_par_nom, ur.nom_complet AS rouvert_par_nom FROM clotures_archives a
+      JOIN utilisateurs uv ON uv.id = a.valide_par JOIN utilisateurs ur ON ur.id = a.rouvert_par WHERE a.id = ?`).get(Number(id));
+    if (!a) fail(404, 'Version archivée introuvable.');
+    return {
+      ...JSON.parse(a.snapshot_json),
+      statut: 'archive',
+      cloture: { valide_par: a.valide_par_nom, valide_le: a.valide_le, commentaire: a.commentaire },
+      archive: { rouvert_par: a.rouvert_par_nom, rouvert_le: a.rouvert_le, justification: a.justification },
+    };
+  };
+  app.get('/api/clotures/archives/:id/rapport.pdf', admin, wrap(async (req, res) => {
+    const r = rapportArchive(req.params.id);
+    res.type('pdf').setHeader('Content-Disposition', `inline; filename="DCS_Salaires_${r.mois}_version_archivee_${Number(req.params.id)}.pdf"`);
+    res.send(await reports.genererPdf(r));
+  }));
+  app.get('/api/clotures/archives/:id/rapport.xlsx', admin, wrap(async (req, res) => {
+    const r = rapportArchive(req.params.id);
+    res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .setHeader('Content-Disposition', `attachment; filename="DCS_Salaires_${r.mois}_version_archivee_${Number(req.params.id)}.xlsx"`);
+    res.send(await reports.genererExcel(r));
+  }));
+
   app.get('/api/emails', admin, (req, res) => {
     // Les notifications de pointage (mois NULL) ne doivent pas faire disparaître les récapitulatifs mensuels.
     const recaps = db.prepare('SELECT * FROM emails WHERE mois IS NOT NULL ORDER BY id DESC LIMIT 100').all();
@@ -578,7 +632,7 @@ function createApp(db,{ now = () => new Date() } = {}) {
   app.use('/api', (req, res) => res.status(404).json({ erreur: 'Ressource introuvable.' }));
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
-    if (err instanceof HttpError) return res.status(err.code).json({ erreur: err.message });
+    if (err instanceof HttpError) return res.status(err.code).json({ erreur: err.message, ...(err.extra || {}) });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ erreur: 'Requête invalide.' });
     console.error(err);
     res.status(500).json({ erreur: 'Erreur interne du serveur.' });

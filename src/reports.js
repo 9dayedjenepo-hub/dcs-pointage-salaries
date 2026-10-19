@@ -19,6 +19,10 @@ function statutTexte(rapport) {
   if (rapport.statut === 'cloture') {
     return `Mois clôturé et validé le ${t.localDateTime(rapport.cloture.valide_le)} par ${rapport.cloture.valide_par}`;
   }
+  if (rapport.statut === 'archive') {
+    return `VERSION ARCHIVÉE — validée le ${t.localDateTime(rapport.cloture.valide_le)} par ${rapport.cloture.valide_par}, `
+      + `rouverte le ${t.localDateTime(rapport.archive.rouvert_le)} par ${rapport.archive.rouvert_par} : ${rapport.archive.justification}`;
+  }
   return 'CALCUL PROVISOIRE — mois non clôturé';
 }
 
@@ -38,9 +42,9 @@ function genererPdf(rapport) {
       doc.font('Helvetica').fontSize(11).fillColor('#222')
         .text(`Rapport mensuel des salaires — ${rapport.libelle_mois}`, left, 50);
       doc.fontSize(8.5).fillColor(rapport.statut === 'cloture' ? '#1b6e3a' : '#b35c00')
-        .text(statutTexte(rapport), left, 66);
+        .text(statutTexte(rapport), left, 66, { width: doc.page.width - 60 });
       doc.fillColor('#222');
-      doc.y = 84;
+      doc.y = Math.max(84, doc.y + 6);
     };
 
     const tableau = (cols, lignes, opts = {}) => {
@@ -100,7 +104,7 @@ function genererPdf(rapport) {
       doc.fillColor('#222');
     }
     doc.moveDown(0.3).font('Helvetica').fontSize(8).fillColor('#555')
-      .text('Salaire calculé = heures validées × tarif horaire en vigueur. Reste à payer = salaire calculé - avances - retenues autorisées. Montants journaliers arrondis au franc ; le salaire du mois est calculé sur la durée exacte cumulée.', left);
+      .text('Salaire calculé = heures validées × tarif horaire en vigueur. Reste à payer = salaire calculé - avances - retenues autorisées. Arrondi : au franc le plus proche, une seule fois, sur le total du mois ; les montants journaliers sont indicatifs (arrondis).', left);
     doc.fillColor('#222');
 
     // Détail par secrétaire
@@ -164,6 +168,9 @@ async function genererExcel(rapport) {
     ws.mergeCells(3, 1, 3, nbCols);
     ws.getCell(3, 1).value = statutTexte(rapport);
     ws.getCell(3, 1).font = { italic: true, color: { argb: rapport.statut === 'cloture' ? 'FF1B6E3A' : 'FFB35C00' } };
+    ws.mergeCells(4, 1, 4, nbCols);
+    ws.getCell(4, 1).value = `Rapport généré le ${t.localDateTime(rapport.genere_le)} (heure de Bamako)`;
+    ws.getCell(4, 1).font = { size: 9, color: { argb: 'FF666666' } };
   };
   const enteteLigne = (row) => {
     row.font = { bold: true };
@@ -199,7 +206,7 @@ async function genererExcel(rapport) {
   tot.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F1E6' } }; c.border = { top: { style: 'thin' } }; });
   for (const col of [6, 7, 8, 9, 10]) ws.getColumn(col).numFmt = F;
   for (const col of [3, 4]) ws.getColumn(col).numFmt = '0.00';
-  ws.getCell(r + 2, 1).value = 'Salaire calculé = heures validées × tarif horaire en vigueur. Reste à payer = salaire calculé − avances − retenues autorisées.';
+  ws.getCell(r + 2, 1).value = 'Salaire calculé = heures validées × tarif horaire en vigueur. Reste à payer = salaire calculé − avances − retenues autorisées. Arrondi : au franc le plus proche, une seule fois, sur le total du mois (ex. 3 h 30 × 125 F = 437,5 F → 438 F).';
   ws.getCell(r + 2, 1).font = { italic: true, size: 9 };
 
   // Détail journalier

@@ -18,6 +18,7 @@ const DUREE_APPAREIL_S = 2 * 365 * 24 * 3600;
 const DUREE_ACTIVATION_MS = 24 * 3600 * 1000;
 const PERIODE_QR_MS = 30 * 1000;
 const TOLERANCE_PERIODES = 2; // QR accepté jusqu'à 60 à 90 s après son affichage
+const PRECISION_MAX_M = 150; // au-delà, la position est jugée trop imprécise : on demande de réessayer
 const MAX_ECHECS = 10;
 const FENETRE_ECHECS_MS = 15 * 60 * 1000;
 
@@ -103,10 +104,10 @@ async function qrDataUrl(texte) {
   return QRCode.toDataURL(texte, { width: 420, margin: 2, errorCorrectionLevel: 'M' });
 }
 
-function afficheQrPdf(entreprise, png, base) {
+function afficheQrPdf(entreprise, png, base, url) {
   const PDFDocument = require('pdfkit');
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: `QR de pointage — ${entreprise}`, Subject: url } });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -199,7 +200,7 @@ function register(app, db,{ now, fail, wrap, txt, admin, posteOuAdmin, enregistr
     const base = adresseBase(db, req);
     const url = `${base}/m.html#c=F.${getParam(db, 'qr_fixe_token')}`;
     const png = await QRCode.toBuffer(url, { width: 900, margin: 1, errorCorrectionLevel: 'M' });
-    const pdf = await afficheQrPdf(getParam(db, 'entreprise'), png, base);
+    const pdf = await afficheQrPdf(getParam(db, 'entreprise'), png, base, url);
     res.setHeader('Cache-Control', 'no-store');
     res.type('pdf').setHeader('Content-Disposition', 'attachment; filename="DCS_QR_pointage_boutique.pdf"');
     res.send(pdf);
@@ -259,35 +260,58 @@ function register(app, db,{ now, fail, wrap, txt, admin, posteOuAdmin, enregistr
   app.post('/api/telephone/pointer', wrap((req, res) => {
     limiter(req, fail);
     const sec = appareilConnecte(req);
-    if (!sec) fail(401, 'Ce téléphone n’est pas activé. Demandez le QR d’activation à la responsable.');
-    const code = txt(req.body?.code, 100);
-    const verif = verifierCodeBoutique(db, code, now());
-    if (verif !== 'ok') {
-      noterEchec(req);
-      fail(400, {
-        expire: 'Ce QR code a expiré. Scannez le QR affiché en ce moment sur l’écran de la boutique.',
-        mauvais_mode: 'Ce QR code n’est plus valable. Scannez le QR affiché sur l’écran de la boutique.',
-        invalide: 'QR code non reconnu. Scannez le QR de pointage de la boutique.',
-      }[verif]);
-    }
-    let distance = null;
-    const gps = gpsConfig(db);
-    if (gps) {
-      const p = req.body?.position;
-      const lat = Number(p?.lat);
-      const lon = Number(p?.lon);
-      const precision = Math.max(0, Number(p?.precision) || 0);
-      if (!p || !Number.isFinite(lat) || !Number.isFinite(lon)) fail(400, 'Activez la localisation du téléphone pour pointer.');
-      distance = Math.round(distanceMetres(gps.lat, gps.lon, lat, lon));
-      if (distance > gps.rayon + Math.min(precision, 50)) {
-        fail(403, `Vous êtes à environ ${distance} m de la boutique. Le pointage n’est possible que sur place (rayon ${gps.rayon} m).`);
+    // Chaque tentative est consignée (heure serveur, résultat, distance, précision GPS).
+    const trace = { secretaire_id: sec?.id ?? null, appareil_id: sec?.appareil_id ?? null, distance: null, precision: null };
+    const consigner = (resultat, extra = {}) => db.prepare(`INSERT INTO tentatives_pointage
+      (cree_le, secretaire_id, appareil_id, source, resultat, type, motif, distance_m, precision_m, pointage_id, ip)
+      VALUES (?, ?, ?, 'telephone', ?, ?, ?, ?, ?, ?, ?)`).run(now().toISOString(), trace.secretaire_id, trace.appareil_id,
+      resultat, extra.type ?? null, extra.motif ?? null, trace.distance, trace.precision, extra.pointage_id ?? null, req.ip ?? null);
+    try {
+      if (!sec) fail(401, 'Ce téléphone n’est pas activé. Demandez le QR d’activation à la responsable.');
+      const code = txt(req.body?.code, 100);
+      const verif = verifierCodeBoutique(db, code, now());
+      if (verif !== 'ok') {
+        noterEchec(req);
+        fail(400, {
+          expire: 'Ce QR code a expiré. Scannez le QR affiché en ce moment sur l’écran de la boutique.',
+          mauvais_mode: 'Ce QR code n’est plus valable. Scannez le QR de pointage affiché à la boutique.',
+          invalide: 'QR code non reconnu. Scannez le QR de pointage de la boutique.',
+        }[verif]);
       }
+      const gps = gpsConfig(db);
+      if (gps) {
+        const p = req.body?.position;
+        const lat = Number(p?.lat);
+        const lon = Number(p?.lon);
+        if (!p || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+          fail(400, 'Position introuvable : activez la localisation du téléphone, puis réessayez.', { reessayer: true });
+        }
+        const precision = Math.max(0, Number(p.precision) || 0);
+        trace.precision = Math.round(precision);
+        trace.distance = Math.round(distanceMetres(gps.lat, gps.lon, lat, lon));
+        if (precision > PRECISION_MAX_M) {
+          fail(422, `Position GPS trop imprécise (± ${trace.precision} m). Patientez quelques secondes, de préférence près d’une porte ou d’une fenêtre, puis réessayez.`, { reessayer: true });
+        }
+        if (trace.distance > gps.rayon + Math.min(precision, 50)) {
+          fail(403, `Vous êtes à environ ${trace.distance} m de la boutique. Le pointage n’est possible que sur place (rayon ${gps.rayon} m).`, { reessayer: true });
+        }
+      }
+      const r = enregistrerPassage(sec, { source: 'telephone', appareilId: sec.appareil_id, distance: trace.distance });
+      db.prepare('UPDATE appareils SET dernier_usage = ? WHERE id = ?').run(now().toISOString(), sec.appareil_id);
+      consigner('accepte', { type: r.type, pointage_id: r.pointage_id, motif: gps ? 'QR et position vérifiés' : 'QR vérifié (contrôle GPS désactivé)' });
+      journal(db, null, `telephone_${r.type}`, { secretaire_id: sec.id, pointage_id: r.pointage_id, distance: trace.distance });
+      res.json({ ...r, distance_m: trace.distance });
+    } catch (e) {
+      consigner('refuse', { motif: e.message });
+      throw e;
     }
-    const r = enregistrerPassage(sec, { source: 'telephone', appareilId: sec.appareil_id, distance });
-    db.prepare('UPDATE appareils SET dernier_usage = ? WHERE id = ?').run(now().toISOString(), sec.appareil_id);
-    journal(db, null, `telephone_${r.type}`, { secretaire_id: sec.id, pointage_id: r.pointage_id, distance });
-    res.json(r);
   }));
+
+  app.get('/api/tentatives', admin, (req, res) => {
+    const rows = db.prepare(`SELECT tp.*, s.prenom || ' ' || s.nom AS secretaire FROM tentatives_pointage tp
+      LEFT JOIN secretaires s ON s.id = tp.secretaire_id ORDER BY tp.id DESC LIMIT 300`).all();
+    res.json(rows.map((r) => ({ ...r, cree_le_local: t.localDateTime(r.cree_le) })));
+  });
 }
 
-module.exports = { register, adresseParDefaut,distanceMetres, codeDynamique, verifierCodeBoutique, PERIODE_QR_MS };
+module.exports = { register, adresseParDefaut, distanceMetres, codeDynamique, verifierCodeBoutique, PERIODE_QR_MS };

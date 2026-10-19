@@ -52,13 +52,16 @@ npm test
 - Les durées sont calculées à partir de l'heure du **serveur**, dans le fuseau **Africa/Bamako**.
 - Les présences qui se chevauchent sont fusionnées : aucune heure n'est comptée deux fois.
 - Une arrivée sans départ n'est **pas comptée**. Elle est signalée « départ manquant » jusqu'à sa correction. Le jour même, elle apparaît « en cours ».
-- Les montants sont calculés à la minute près. Le salaire mensuel est arrondi au franc une seule fois, sur la durée totale.
+- **Arrondi** : le montant est calculé exactement à la minute, puis arrondi au franc le plus proche **une seule fois**, sur le total du mois de chaque secrétaire. Exemple : 3 h 30 × 125 F = 437,5 F avant arrondi, 438 F payés. Le montant exact est visible dans le détail de chaque secrétaire ; les montants journaliers du rapport sont indicatifs.
 - Reste à payer = salaire calculé − avances − autres retenues autorisées. Un solde négatif est signalé « à examiner ». Il n'est jamais reporté automatiquement sur le mois suivant.
 - Absences = jours ouvrables écoulés (lundi à samedi par défaut, modifiable) sans aucun pointage, à partir de la date d'embauche.
 - Heures supplémentaires : désactivées par défaut. Dans Paramètres, on peut fixer un seuil journalier (ex. 8 h) et une majoration en %.
 - Chaque tarif est enregistré avec sa date d'effet. Un changement de tarif ne modifie jamais les jours précédents, ni les mois clôturés.
 - Correction d'un pointage : la justification est obligatoire. L'ancienne valeur, la nouvelle valeur, l'auteur et la date sont conservés. Un pointage n'est jamais supprimé : il peut seulement être annulé.
 - Un mois clôturé ne peut plus être modifié (pointages, avances, retenues, tarif). Son rapport est figé.
+- Correction exceptionnelle : un administrateur peut **rouvrir** un mois clôturé (Salaires › « Rouvrir pour une correction exceptionnelle »), avec une justification obligatoire. La version validée est archivée intacte (Historique › Versions archivées, en PDF et Excel), puis le mois est recorrigé et clôturé à nouveau.
+- Chaque tentative de pointage, acceptée ou refusée, est consignée avec l'heure du serveur, le résultat, la distance et la précision GPS (Historique › Tentatives de pointage). Les refus de localisation décidés par le téléphone lui-même (autorisation refusée) n'atteignent pas le serveur et n'y figurent donc pas.
+- Contrôle GPS : une position plus imprécise que ± 150 m est refusée avec un bouton « Réessayer ». Le GPS d'un navigateur peut être falsifié avec des outils spécialisés : il dissuade, mais la vraie protection reste le QR dynamique (ou le remplacement régulier du QR fixe).
 - Calcul automatique de fin de mois : dès le 1er du mois, la paie du mois écoulé est calculée et signalée « à valider » sur le tableau de bord. La clôture reste une décision de l'administrateur.
 
 ## E-mails à l'administrateur

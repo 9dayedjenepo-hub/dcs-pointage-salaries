@@ -514,7 +514,7 @@
   // ---------- Salaires et rémunérations ----------
   async function pageSalaires(el) {
     const mois = state.mois || nowBamako().mois;
-    el.innerHTML = `<div class="entete-page"><div><h1>Salaires et rémunérations</h1><p>Salaire = heures travaillées et validées × tarif horaire. Reste à payer = salaire calculé − avances − autres retenues autorisées.</p></div></div>
+    el.innerHTML = `<div class="entete-page"><div><h1>Salaires et rémunérations</h1><p>Salaire = heures travaillées et validées × tarif horaire. Reste à payer = salaire calculé − avances − autres retenues autorisées.</p><p class="mut">Arrondi : calcul exact à la minute, puis arrondi au franc le plus proche une seule fois, sur le total du mois (ex. 3 h 30 × 125 F = 437,5 F → 438 F).</p></div></div>
       <div class="carte">${selecteurMois(mois, 'sm')}</div><div id="zone"></div>`;
     brancherSelecteur('sm', (m) => { state.mois = m; charger(); });
     const secs = await api('GET', '/api/secretaires');
@@ -534,7 +534,7 @@
       const tx = p.taux_en_vigueur;
 
       zone.innerHTML = `
-        ${clos ? `<div class="bandeau ok"><strong>Mois clôturé et validé</strong> le ${esc(dtLocal(p.cloture.valide_le))} par ${esc(p.cloture.valide_par)}. Les montants sont figés et ne seront plus recalculés.${p.cloture.commentaire ? `<br>Commentaire : ${esc(p.cloture.commentaire)}` : ''}</div>`
+        ${clos ? `<div class="bandeau ok"><strong>Mois clôturé et validé</strong> le ${esc(dtLocal(p.cloture.valide_le))} par ${esc(p.cloture.valide_par)}. Les montants sont figés et ne seront plus recalculés.${p.cloture.commentaire ? `<br>Commentaire : ${esc(p.cloture.commentaire)}` : ''}<div style="margin-top:.5rem"><button class="danger petit" id="btn-rouvrir">Rouvrir pour une correction exceptionnelle</button></div></div>`
           : `<div class="bandeau info"><strong>Calcul provisoire</strong> — ${p.mois_termine ? 'mois terminé, en attente de votre validation.' : 'mois en cours, les chiffres évoluent avec les pointages.'} Tarif en vigueur : <strong>${F(tx.taux)}/heure</strong>${tx.hs_seuil_minutes != null ? `, heures supplémentaires au-delà de ${H(tx.hs_seuil_minutes)}/jour majorées de ${tx.hs_majoration_pct} %` : ', heures supplémentaires non configurées'}.</div>`}
         ${incomplets.length ? `<div class="bandeau attention"><strong>${incomplets.length} arrivée(s) sans départ enregistré</strong> — non comptées dans les heures :<ul>${incomplets.map((i) => `<li>${esc(i.nom)} — ${dateFr(i.date)}, arrivée ${i.arrivee}</li>`).join('')}</ul>${!clos ? '<a href="#/pointages">Corriger dans « Pointages et corrections »</a>' : ''}</div>` : ''}
         ${anomalies.length ? `<div class="bandeau attention"><strong>Anomalies à vérifier :</strong><ul>${anomalies.map((a) => `<li>${esc(a.nom)} — ${dateFr(a.date)} : ${esc(a.message)}</li>`).join('')}</ul></div>` : ''}
@@ -578,6 +578,16 @@
         </div>`;
 
       zone.querySelectorAll('tr[data-i]').forEach((tr) => tr.addEventListener('click', () => detailSecretaire(p.secretaires[Number(tr.dataset.i)], p)));
+      const br = document.getElementById('btn-rouvrir');
+      if (br) br.onclick = async () => {
+        const r = await formModal({
+          titre: `Rouvrir ${p.libelle_mois}`, bouton: 'Rouvrir le mois',
+          intro: `<div class="bandeau attention">Réservé aux corrections exceptionnelles. La version validée est <strong>archivée intacte</strong> (consultable dans Historique) ; le mois redevient modifiable jusqu’à une nouvelle clôture. L’opération est tracée à votre nom.</div>`,
+          champs: [{ name: 'justification', label: 'Justification (obligatoire)', type: 'textarea', required: true, aide: 'Ex. : départ de Bintou le 12/09 oublié, confirmé par la responsable.' }],
+          onSubmit: (v) => api('POST', `/api/paie/${p.mois}/rouvrir`, v),
+        });
+        if (r) { toast(`${p.libelle_mois} est rouvert pour correction.`); charger(); }
+      };
       const bc = document.getElementById('btn-cloturer');
       if (bc) bc.onclick = () => cloturer(p);
       const be = document.getElementById('btn-email');
@@ -642,6 +652,7 @@
         <tr class="total"><td>Cumul</td><td></td><td class="n">${H(s.minutes)}</td><td class="n">${H(s.minutes_hs)}</td><td></td><td class="n">${F(s.salaire_brut)}</td><td></td></tr>
         </tbody></table></div>
         ${s.dates_absence.length ? `<p class="mut">Absences (${s.absences}) : ${s.dates_absence.map(dateFr).join(', ')}</p>` : ''}
+        ${s.salaire_exact != null && s.salaire_exact !== s.salaire_brut ? `<p class="mut">Montant exact avant arrondi : ${String(s.salaire_exact).replace('.', ',')} F (arrondi au franc : ${F(s.salaire_brut)}).</p>` : ''}
         <p>Salaire calculé ${F(s.salaire_brut)} − avances ${F(s.avances_total)} − retenues ${F(s.retenues_total)} = <strong class="${s.solde_negatif ? 'negatif' : ''}">${F(s.net)}</strong></p>`);
     }
 
@@ -668,7 +679,7 @@
 
   // ---------- Historique ----------
   async function pageHistorique(el) {
-    const [clotures, emails, corrections] = await Promise.all([api('GET', '/api/clotures'), api('GET', '/api/emails'), api('GET', '/api/corrections')]);
+    const [clotures, emails, corrections, archives, tentatives] = await Promise.all([api('GET', '/api/clotures'), api('GET', '/api/emails'), api('GET', '/api/corrections'), api('GET', '/api/clotures/archives'), api('GET', '/api/tentatives')]);
     const libE = { envoye: ['ok', 'Envoyé'], non_envoye: ['attention', 'Non envoyé'], echec: ['erreur', 'Échec'] };
     el.innerHTML = `<div class="entete-page"><div><h1>Historique</h1><p>Rapports des mois clôturés, e-mails envoyés et corrections de pointage.</p></div></div>
       <div class="carte"><h2>Mois clôturés</h2><div class="table-wrap"><table><thead><tr><th>Mois</th><th class="n">Heures</th><th class="n">Salaires calculés</th><th class="n">Avances</th><th class="n">Reste à payer</th><th>Validé</th><th>Rapports</th></tr></thead><tbody>
@@ -679,6 +690,15 @@
       <div class="carte"><h2>E-mails envoyés</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Objet</th><th>Destinataire</th><th>État</th><th></th></tr></thead><tbody>
       ${emails.map((e, i) => `<tr><td>${esc(dtLocal(e.cree_le))}</td><td>${e.mois ? `Récapitulatif de ${esc(moisLib(e.mois))}` : esc(e.sujet.replace(/^\[[^\]]*\]\s*/, ''))}</td><td>${esc(e.destinataire || '—')}</td><td>${etat(...libE[e.statut])}${e.erreur ? `<br><small>${esc(e.erreur)}</small>` : ''}</td>
         <td><button class="sec petit" data-mail="${i}">Voir</button></td></tr>`).join('') || '<tr><td colspan="5" class="vide">Aucun e-mail.</td></tr>'}
+      </tbody></table></div></div>
+      ${archives.length ? `<div class="carte"><h2>Versions archivées (mois rouverts pour correction)</h2><div class="table-wrap"><table><thead><tr><th>Mois</th><th class="n">Salaires</th><th class="n">Reste à payer</th><th>Validée</th><th>Rouverte</th><th>Justification</th><th>Rapports</th></tr></thead><tbody>
+      ${archives.map((a) => `<tr><td>${esc(a.libelle)}</td><td class="n">${F(a.totaux.salaire_brut)}</td><td class="n">${F(a.totaux.net)}</td><td>${esc(dtLocal(a.valide_le))}<br><small>${esc(a.valide_par)}</small></td><td>${esc(dtLocal(a.rouvert_le))}<br><small>${esc(a.rouvert_par)}</small></td><td>${esc(a.justification)}</td>
+        <td class="actions"><a class="btn sec petit" href="/api/clotures/archives/${a.id}/rapport.pdf" target="_blank" rel="noopener">PDF</a><a class="btn sec petit" href="/api/clotures/archives/${a.id}/rapport.xlsx">Excel</a></td></tr>`).join('')}
+      </tbody></table></div></div>` : ''}
+      <div class="carte"><h2>Tentatives de pointage (300 dernières)</h2><p class="mut">Chaque scan est consigné avec l’heure du serveur et le résultat des vérifications (QR, position GPS).</p><div class="table-wrap"><table><thead><tr><th>Date et heure</th><th>Secrétaire</th><th>Moyen</th><th>Résultat</th><th>Détail</th><th class="n">Distance</th><th class="n">Précision GPS</th></tr></thead><tbody>
+      ${tentatives.map((x) => `<tr><td>${esc(x.cree_le_local)}</td><td>${esc(x.secretaire || 'Inconnu')}</td><td>${x.source === 'telephone' ? 'Téléphone' : 'Badge'}</td>
+        <td>${x.resultat === 'accepte' ? etat('ok', x.type === 'depart' ? 'Départ enregistré' : 'Arrivée enregistrée') : etat('erreur', 'Refusé')}</td><td>${esc(x.motif || '')}</td>
+        <td class="n">${x.distance_m != null ? `${x.distance_m} m` : '—'}</td><td class="n">${x.precision_m != null ? `± ${x.precision_m} m` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="vide">Aucune tentative enregistrée.</td></tr>'}
       </tbody></table></div></div>
       <div class="carte"><h2>Corrections de pointage</h2>${tableauCorrections(corrections)}</div>`;
     el.querySelectorAll('[data-mail]').forEach((b) => b.addEventListener('click', () => {

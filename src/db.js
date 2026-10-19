@@ -130,6 +130,36 @@ CREATE TABLE IF NOT EXISTS clotures (
   commentaire TEXT
 );
 
+-- Versions validées d'un mois rouvert exceptionnellement : conservées telles quelles pour l'audit.
+CREATE TABLE IF NOT EXISTS clotures_archives (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mois TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  valide_par INTEGER NOT NULL REFERENCES utilisateurs(id),
+  valide_le TEXT NOT NULL,
+  commentaire TEXT,
+  rouvert_par INTEGER NOT NULL REFERENCES utilisateurs(id),
+  rouvert_le TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  justification TEXT NOT NULL
+);
+
+-- Chaque tentative de pointage (acceptée ou refusée), avec le résultat des vérifications.
+CREATE TABLE IF NOT EXISTS tentatives_pointage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cree_le TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  secretaire_id INTEGER REFERENCES secretaires(id),
+  appareil_id INTEGER,
+  source TEXT NOT NULL,
+  resultat TEXT NOT NULL CHECK (resultat IN ('accepte', 'refuse')),
+  type TEXT,
+  motif TEXT,
+  distance_m INTEGER,
+  precision_m INTEGER,
+  pointage_id INTEGER,
+  ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tentatives_date ON tentatives_pointage(cree_le);
+
 CREATE TABLE IF NOT EXISTS parametres (
   cle TEXT PRIMARY KEY,
   valeur TEXT
