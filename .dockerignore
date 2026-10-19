@@ -1,0 +1,8 @@
+node_modules
+data
+.env
+.claude
+test
+scripts
+*.md
+.railway-token
